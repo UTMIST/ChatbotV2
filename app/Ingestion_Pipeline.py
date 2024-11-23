@@ -7,6 +7,12 @@ from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.extractors import TitleExtractor
 from llama_index.core.ingestion import IngestionPipeline
 import qdrant_client
+from llama_index.core import (
+    VectorStoreIndex,
+    SimpleDirectoryReader,
+    StorageContext,
+    load_index_from_storage,
+)
 from llama_index.vector_stores.qdrant import QdrantVectorStore 
 from llama_index.core import VectorStoreIndex
 from llama_index.core.extractors import (
@@ -59,5 +65,9 @@ pipeline = IngestionPipeline(
 documents = read_files(directory)
 nodes = pipeline.run(documents=documents)
 
-index = VectorStoreIndex(nodes=nodes)
+storage_context = StorageContext.from_defaults(persist_dir="./storage")
+index = load_index_from_storage(storage_context)
+
+index.insert_nodes(nodes)
+
 index.storage_context.persist()
