@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 # Modified for rag
-from custom_query_with_PastChat import classifyRelevance, aiResponse
+from custom_query_with_PastChat import get_response_with_relevance
 # from rag_handler import ai_response, save_unanswered_queries, update_vector_database  
 import os
 from pathlib import Path
@@ -45,9 +45,8 @@ async def on_message(message):
             await message.channel.send("Welcome to UTMIST!")
             
         else:
-            relevance = classifyRelevance(message.content)  # Modified for rag
-            print("Relevance:", relevance)                 # Modified for rag
-            output = aiResponse(message.content)
+            print("message.content: " + message.content)
+            output = get_response_with_relevance(message.content)
             await message.channel.send(output)
     else:
         # Ignore messages not in the target guild and channel
