@@ -22,6 +22,7 @@ from openai import OpenAI as openai_client
 from openai.types.chat import ChatCompletion
 
 from dotenv import load_dotenv
+import re
 
 def strip_whole_str(input_str: str, substr: str) -> str:
     """
@@ -142,55 +143,54 @@ def classifyRelevance(input, retriever=retriever) -> Relevance:
     :return: ``Relevance.known`` if the input is known, ``Relevance.unknown`` if the input is unknown, and ``Relevance.irrelevant`` if the input is irrelevant.
     """
 
-    RELEVANCE_DETERMINATION_PROMPT = """You are talking to a user as a representative of a club called the University of Toronto Machine Intelligence Team (UTMIST). 
+    RELEVANCE_DETERMINATION_PROMPT = """
+You are a representative of the University of Toronto Machine Intelligence Team (UTMIST), which focuses on AI/ML education, events, and research. Your task is to classify user queries based on their relevance to UTMIST and AI/ML topics.
 
-Your job is to determine whether the user's query is relevant to any of the following, and output one of the responses according to the possible scenarios.
+Possible query types:
+1. Questions directly about UTMIST (e.g., events, initiatives, membership).
+2. General AI/ML-related questions (not specific to UTMIST, but within the AI/ML domain).
+3. Questions about homework, assignments, or specific academic problems.
+4. Completely unrelated queries.
 
-1. AI and machine learning related questions
-2. UTMIST club information and events
+Rules for classification:
+1. If the query is explicitly about UTMIST, classify as "known".
+2. If the query is a general AI/ML question (e.g., about models, techniques, etc.), classify as "known".
+3. If the query appears to ask for homework help or problem-solving (e.g., math problems, coding assignments, etc.), classify as "irrelevant".
+4. If the query is relevant to UTMIST or AI/ML but the information is not available in the context, classify as "unknown".
+5. If the query is unrelated to AI/ML or UTMIST, classify as "irrelevant".
 
-Note that when the user refers to "you" or "your", they are referring to UTMIST.    
-
-<possible scenarios>
-
-1. SCENARIO: If the query seems relevant to UTMIST (i.e. events or general info) or AI and the "context" explicitly contains information about the query; OUTPUT: "known"
-2. SCENARIO: If the query is about GENERAL knowledge in AI/ML but NOT about UTMIST; OUTPUT: "known"
-3. SCENARIO: If the query seems relevant to UTMIST or AI but the information is not in "context" AND it is NOT GENERAL knowledge about AI/ML; OUTPUT: "unknown"
-4. SCENARIO: If the query is completely irrelevant to the criteria above; OUTPUT: "irrelevant"
-
-</possible scenarios>
+Examples:
 
 Example A:
-
 <context>
-UTMIST is a club to help students learn about AI
+UTMIST runs workshops on AI model development.
 </context>
-
-Query: When was UTMIST founded?
-
-Output: unknown
-
-Example B:
-
-<context>
-The GenAI conference will be on April 30, 2024
-</context>
-
-Query: What do you know about history?
-
+Query: Can you solve this integral for me: ∫x^2 dx?
 Output: irrelevant
 
-Example C:
-
+Example B:
 <context>
-The GenAI conference will help students learn about AI.
+UTMIST is hosting a GenAI conference.
 </context>
+Query: When is the GenAI conference?
+Output: known
 
-Query: What is the GenAI conference?
+Example C:
+<context>
+The GenAI conference will focus on language models.
+</context>
+Query: What is a transformer in machine learning?
+Output: known
 
-Output: relevant
+Example D:
+<context>
+UTMIST helps students connect with AI/ML experts.
+</context>
+Query: Can you summarize my Python homework for me?
+Output: irrelevant
 
-### END OF EXAMPLES ###"""
+### END OF PROMPT ###
+"""
 
     nodes = retriever.retrieve(input)
 
@@ -219,11 +219,37 @@ Output: """
 
     return Relevance.UNKNOWN
 
+def is_homework_query(input: str) -> bool:
+    """
+    Detects if a query is likely related to homework, assignments, or problem-solving.
+    """
+    # Common patterns in homework queries
+    homework_keywords = [
+        r"\bsolve\b",
+        r"\bcalculate\b",
+        r"\bintegrate\b",
+        r"\bdifferentiate\b",
+        r"\bsort\b",
+        r"\bwrite a function\b",
+        r"\bprove\b",
+        r"\bimplement\b",
+        r"\bhomework\b",
+        r"\bassignment\b",
+    ]
+
+    pattern = re.compile("|".join(homework_keywords), re.IGNORECASE)
+    return bool(pattern.search(input))
 
 def get_response_with_relevance(input: str, past_chat_history=[], retriever=retriever) -> str:
     relevance = classifyRelevance(input, retriever=retriever)
-
-    print("relevance: " + str(relevance))
+    print("Relevence: ", relevance)    
+    # Check for homework-like queries
+    if is_homework_query(input):
+        return (
+            "I'm sorry, I cannot assist with homework, coding assignments, or problem-solving. "
+            "Please refer to your course materials or consult your instructor for help."
+        )
+    
     if relevance == Relevance.KNOWN:
         return aiResponse(input)
     elif relevance == Relevance.UNKNOWN:
