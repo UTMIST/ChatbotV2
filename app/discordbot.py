@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 # Modified for rag
-from custom_query_with_PastChat import classifyRelevance, aiResponse
+from custom_query_with_PastChat import classifyRelevance, aiResponse, get_response_with_relevance, Relevance
 # from rag_handler import ai_response, save_unanswered_queries, update_vector_database  
 import os
 from pathlib import Path
@@ -19,8 +19,8 @@ env_path = Path("..") / ".env"
 load_dotenv(dotenv_path=env_path)
 
 # Get target guild and channel IDs from environment variables or hard-code them
-TARGET_GUILD_ID = int(os.environ.get("TARGET_GUILD_ID", "1208261679352250458"))
-TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID", "1243945628124446802"))
+TARGET_GUILD_ID = int(os.environ.get("TARGET_GUILD_ID", "ID"))
+TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID", "ID"))
 
 @client.event
 async def on_ready():
@@ -41,13 +41,8 @@ async def on_message(message):
             await message.add_reaction('\U0001F970')
 
         # Respond
-        elif message.content.lower() == "hello":
-            await message.channel.send("Welcome to UTMIST!")
-            
         else:
-            relevance = classifyRelevance(message.content)  # Modified for rag
-            print("Relevance:", relevance)                 # Modified for rag
-            output = aiResponse(message.content)
+            output = get_response_with_relevance(message.content)
             await message.channel.send(output)
     else:
         # Ignore messages not in the target guild and channel
