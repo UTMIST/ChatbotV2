@@ -42,6 +42,8 @@ async def on_message(message):
 
         # Respond
         else:
+            print("message.content: " + message.content)
+
             output = get_response_with_relevance(message.content)
             await message.channel.send(output)
     else:

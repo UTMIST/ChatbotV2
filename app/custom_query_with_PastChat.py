@@ -61,7 +61,10 @@ def update_chat_history(role, message):
     chat_history.append({"role":role, "content": message})
 
 def embed_chat_history(chat_history):
-    pass
+    conversations = [Document(text=message['content']) for message in chat_history]
+    index = VectorStoreIndex.from_documents(conversations, embedding_model = embedding_model)
+    index.storage_context.persist() 
+
 
 qa_prompt = PromptTemplate(
     "Context information is below.\n"
