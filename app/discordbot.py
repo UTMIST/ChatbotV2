@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 # Modified for rag
-from custom_query_with_PastChat import classifyRelevance, aiResponse, update_chat_history
+from custom_query_with_PastChat import classifyRelevance, aiResponse, get_response_with_relevance, Relevance, update_chat_history
 # from rag_handler import ai_response, save_unanswered_queries, update_vector_database  
 import os
 import os.path
@@ -20,8 +20,8 @@ env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 # Get target guild and channel IDs from environment variables or hard-code them
-TARGET_GUILD_ID = int(os.environ.get("TARGET_GUILD_ID", "1208261679352250458"))
-TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID", "1305282516336250890"))
+TARGET_GUILD_ID = int(os.environ.get("TARGET_GUILD_ID", "ID"))
+TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID", "ID"))
 
 @client.event
 async def on_ready():
@@ -42,9 +42,6 @@ async def on_message(message):
             await message.add_reaction('\U0001F970')
 
         # Respond
-        elif message.content.lower() == "hello":
-            await message.channel.send("Welcome to UTMIST!")
-            
         else:
             relevance = classifyRelevance(message.content)  # Modified for rag
             print("Relevance:", relevance)                 # Modified for rag
@@ -86,3 +83,4 @@ async def on_reaction_add(reaction, user):
 
 discord_key = os.environ.get("DISCORD_KEY")
 client.run(f"{discord_key}")
+
