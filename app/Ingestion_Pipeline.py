@@ -22,13 +22,16 @@ from llama_index.core.extractors import (
     KeywordExtractor
 )
 from llama_index.core.schema import MetadataMode, Document
+from dotenv import load_dotenv
 
-os.environ["OPENAI_API_KEY"] = "Your Key"
+load_dotenv()
+
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 # Set up OpenAI API key
 llm = OpenAI(temperature=0.1, model="gpt-3.5-turbo")
 
 # Define the directory containing the text files
-directory = '/Users/dingshengliu/Desktop/ChatbotAI/AI Chatbot Version 2/app/data'
+directory = './app/data'
 
 # Function to read text files and create Document objects
 def read_files(directory):
@@ -36,7 +39,7 @@ def read_files(directory):
     for filename in os.listdir(directory):
         if filename.endswith(".txt"):
             file_path = os.path.join(directory, filename)
-            with open(file_path, 'r') as file:
+            with open(file_path, 'r', encoding='utf-8') as file:
                 content = file.read()
                 documents.append(Document(text=content))
     return documents
@@ -67,7 +70,6 @@ nodes = pipeline.run(documents=documents)
 
 storage_context = StorageContext.from_defaults(persist_dir="./storage")
 index = load_index_from_storage(storage_context)
-
 index.insert_nodes(nodes)
 
 index.storage_context.persist()
