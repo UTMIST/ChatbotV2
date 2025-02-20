@@ -18,10 +18,9 @@ client = discord.Client(intents=intents)
 # Modified for rag
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
-
 # Get target guild and channel IDs from environment variables or hard-code them
-TARGET_GUILD_ID = int(os.environ.get("TARGET_GUILD_ID", "ID"))
-TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID", "ID"))
+TARGET_GUILD_ID = int(os.environ.get("GUILD_ID"))
+TARGET_CHANNEL_ID = int(os.environ.get("CHANNEL_ID"))
 
 @client.event
 async def on_ready():
