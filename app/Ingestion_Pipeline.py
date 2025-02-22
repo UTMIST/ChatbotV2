@@ -22,8 +22,11 @@ from llama_index.core.extractors import (
     KeywordExtractor
 )
 from llama_index.core.schema import MetadataMode, Document
+from dotenv import load_dotenv
 
-os.environ["OPENAI_API_KEY"] = "Your Key"
+load_dotenv()
+
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 # Set up OpenAI API key
 llm = OpenAI(temperature=0.1, model="gpt-3.5-turbo")
 
@@ -70,7 +73,6 @@ nodes = pipeline.run(documents=documents)
 
 storage_context = StorageContext.from_defaults(persist_dir="./storage")
 index = load_index_from_storage(storage_context)
-
 index.insert_nodes(nodes)
 
 index.storage_context.persist()
