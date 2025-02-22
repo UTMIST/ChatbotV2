@@ -1,9 +1,10 @@
 import discord
 from discord.ext import commands, tasks
 # Modified for rag
-from custom_query_with_PastChat import classifyRelevance, aiResponse, get_response_with_relevance, Relevance
+from custom_query_with_PastChat import classifyRelevance, aiResponse, get_response_with_relevance, Relevance, update_chat_history
 # from rag_handler import ai_response, save_unanswered_queries, update_vector_database  
 import os
+import os.path
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -15,12 +16,11 @@ intents.reactions = True
 client = discord.Client(intents=intents)
 
 # Modified for rag
-env_path = Path("..") / ".env"
+env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
-
 # Get target guild and channel IDs from environment variables or hard-code them
-TARGET_GUILD_ID = int(os.environ.get("TARGET_GUILD_ID", "ID"))
-TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID", "ID"))
+TARGET_GUILD_ID = int(os.environ.get("GUILD_ID"))
+TARGET_CHANNEL_ID = int(os.environ.get("CHANNEL_ID"))
 
 @client.event
 async def on_ready():
@@ -42,9 +42,12 @@ async def on_message(message):
 
         # Respond
         else:
-            print("message.content: " + message.content)
-
-            output = get_response_with_relevance(message.content)
+            relevance = classifyRelevance(message.content)  # Modified for rag
+            print("Relevance:", relevance)                 # Modified for rag
+            print(message)
+            output = aiResponse(input=message.content, userID=message.author.name)
+            update_chat_history(userID=message.author.name, role='user', message=message.content)
+            update_chat_history(userID=message.author.name, role='bot', message=output)
             await message.channel.send(output)
     else:
         # Ignore messages not in the target guild and channel
@@ -77,4 +80,6 @@ async def on_reaction_add(reaction, user):
 #     await client.wait_until_ready()
 #     update_vector_database()
 
-client.run("Your Key")
+discord_key = os.environ.get("DISCORD_KEY")
+client.run(f"{discord_key}")
+

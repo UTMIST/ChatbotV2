@@ -2,6 +2,9 @@ from llama_index.core.query_engine import CustomQueryEngine
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core import get_response_synthesizer
 from llama_index.core.response_synthesizers import BaseSynthesizer
+from llama_index.core.storage.chat_store import SimpleChatStore
+from llama_index.core.memory import ChatMemoryBuffer
+from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core import (
     VectorStoreIndex,
     SimpleDirectoryReader,
@@ -22,7 +25,6 @@ from openai import OpenAI as openai_client
 from openai.types.chat import ChatCompletion
 
 from dotenv import load_dotenv
-import re
 
 def strip_whole_str(input_str: str, substr: str) -> str:
     """
@@ -34,11 +36,11 @@ def strip_whole_str(input_str: str, substr: str) -> str:
     """
     return input_str.replace(substr, '')
 
-env_path = Path("..") / ".env"
+env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 if not os.environ.get("OPENAI_API_KEY"):
-    os.environ["OPENAI_API_KEY"] = "Your Key"
+    os.environ["OPENAI_API_KEY"] = "Your key"
 openai_client_instance = openai
 embedding_model = openai_client(api_key=os.environ.get("OPENAI_API_KEY"))
 
@@ -51,23 +53,44 @@ index = load_index_from_storage(storage_context)
 retriever = index.as_retriever()
 
 #Chat History management
-chat_history = []
+chat_store = SimpleChatStore()
 
-def update_chat_history(role, message):
-    '''
-    :param role: The role of the message sender ("user" or "bot").
-    :param message: The content of the message.
-    '''
-    chat_history.append({"role":role, "content": message})
+# Get the memory module for the given user, which can be used to add new messages.
+def get_memory_module(userID: str):
+    if userID not in chat_store.get_keys():
+        return ChatMemoryBuffer.from_defaults(
+            token_limit=1500,
+            chat_store=chat_store,
+            chat_store_key=userID,
+        )
+    else:
+        chat_memory = ChatMemoryBuffer(token_limit=1500)
+        chat_memory.set(chat_store.store.get(userID))
+        return chat_memory
+
+# Add new messages to the user's chat history.
+def update_chat_history(userID: str, role: str, message: str) -> None:
+    chat_memory = get_memory_module(userID)
+    if role == 'user':
+        chat_memory.put(ChatMessage(role=MessageRole.USER, content=message))
+    elif role == 'bot':
+        chat_memory.put(ChatMessage(role=MessageRole.CHATBOT, content=message))
+
+
+def get_chat_history(userID: str) -> list[ChatMessage]:
+    if userID not in chat_store.get_keys():
+        return []
+    return chat_store.store.get(userID)
+
 
 def embed_chat_history(chat_history):
-    conversations = [Document(text=message['content']) for message in chat_history]
-    index = VectorStoreIndex.from_documents(conversations, embedding_model = embedding_model)
-    index.storage_context.persist() 
-
+    pass
 
 qa_prompt = PromptTemplate(
-    "Context information is below.\n"
+    "Below is the past chat history. \n"
+    "---------------------\n"
+    "{past_context}\n"
+    "Below is relevant information. Use only if the query is relevant to UTMIST.\n"
     "---------------------\n"
     "{context_str}\n"
     "---------------------\n"
@@ -92,29 +115,8 @@ class RAGStringQueryEngine(CustomQueryEngine):
     qa_prompt: PromptTemplate
 
     # Custom query that incorporates chat history
-    def custom_query(self, query_str: str, past_chat_history: list):
-        # Embed past chat history
-        embed_chat_history(past_chat_history)
-
-        # Retrieve past conversations from the vector database
-        past_nodes = self.retriever.retrieve(query_str)
-        past_context_str = "\n\n".join([n.node.get_content() for n in past_nodes])
-
-        # Address current context
-        nodes = self.retriever.retrieve(query_str)
-        context_str = "\n\n".join([n.node.get_content() for n in nodes])
-
-        # Combine past and current contexts
-        combined_context = f'{past_context_str}\n\n{context_str}'
-
-        # Use self.qa_prompt here
-        prompt_text = self.qa_prompt.format(
-            context_str=combined_context,
-            query_str=query_str
-        )
-
+    def custom_query(self, prompt_text):
         response = self.llm.complete(prompt_text)
-
         return str(response)
 
 
@@ -157,7 +159,7 @@ llm = OpenAI(model="gpt-3.5-turbo", max_tokens = 500)
 synthesizer = get_response_synthesizer(response_mode="compact")
 
 #aiResponse combiend with past_chat_history
-def aiResponse(input, past_chat_history=[]):
+def aiResponse(input, userID):
     # Determine the response length classification
     response_length = determine_response_length(input)
 
@@ -168,11 +170,19 @@ def aiResponse(input, past_chat_history=[]):
     else:  # "specific"
         length_instructions = "Please provide a detailed answer, still not exceeding 200 words."
 
+    # Retrieve past conversations
+    past_context_str = "\n\n".join([f"{msg.role.value}: {msg.content}" for msg in get_chat_history(userID=userID)])
+
+    # Address current context from the vector database
+    nodes = retriever.retrieve(input)
+    context_str = "\n\n".join([n.node.get_content() for n in nodes])
+
     # Format the QA prompt with the length instructions
     qa_prompt_formatted = qa_prompt.format(
         length_instructions=length_instructions,
-        context_str="{context_str}",
-        query_str="{query_str}"
+        past_context=past_context_str,
+        context_str=context_str,
+        query_str=input
     )
     qa_prompt_local = PromptTemplate(qa_prompt_formatted)
 
@@ -183,7 +193,7 @@ def aiResponse(input, past_chat_history=[]):
         qa_prompt=qa_prompt_local,
     )
 
-    response = query_engine.custom_query(str(input), past_chat_history)
+    response = query_engine.custom_query(qa_prompt_formatted)
     return response
 
 
@@ -201,54 +211,55 @@ def classifyRelevance(input, retriever=retriever) -> Relevance:
     :return: ``Relevance.known`` if the input is known, ``Relevance.unknown`` if the input is unknown, and ``Relevance.irrelevant`` if the input is irrelevant.
     """
 
-    RELEVANCE_DETERMINATION_PROMPT = """
-You are a representative of the University of Toronto Machine Intelligence Team (UTMIST), which focuses on AI/ML education, events, and research. Your task is to classify user queries based on their relevance to UTMIST and AI/ML topics.
+    RELEVANCE_DETERMINATION_PROMPT = """You are talking to a user as a representative of a club called the University of Toronto Machine Intelligence Team (UTMIST). 
 
-Possible query types:
-1. Questions directly about UTMIST (e.g., events, initiatives, membership).
-2. General AI/ML-related questions (not specific to UTMIST, but within the AI/ML domain).
-3. Questions about homework, assignments, or specific academic problems.
-4. Completely unrelated queries.
+Your job is to determine whether the user's query is relevant to any of the following, and output one of the responses according to the possible scenarios.
 
-Rules for classification:
-1. If the query is explicitly about UTMIST, classify as "known".
-2. If the query is a general AI/ML question (e.g., about models, techniques, etc.), classify as "known".
-3. If the query appears to ask for homework help or problem-solving (e.g., math problems, coding assignments, etc.), classify as "irrelevant".
-4. If the query is relevant to UTMIST or AI/ML but the information is not available in the context, classify as "unknown".
-5. If the query is unrelated to AI/ML or UTMIST, classify as "irrelevant".
+1. AI and machine learning related questions
+2. UTMIST club information and events
 
-Examples:
+Note that when the user refers to "you" or "your", they are referring to UTMIST.    
+
+<possible scenarios>
+
+1. SCENARIO: If the query seems relevant to UTMIST (i.e. events or general info) or AI and the "context" explicitly contains information about the query; OUTPUT: "known"
+2. SCENARIO: If the query is about GENERAL knowledge in AI/ML but NOT about UTMIST; OUTPUT: "known"
+3. SCENARIO: If the query seems relevant to UTMIST or AI but the information is not in "context" AND it is NOT GENERAL knowledge about AI/ML; OUTPUT: "unknown"
+4. SCENARIO: If the query is completely irrelevant to the criteria above; OUTPUT: "irrelevant"
+
+</possible scenarios>
 
 Example A:
+
 <context>
-UTMIST runs workshops on AI model development.
+UTMIST is a club to help students learn about AI
 </context>
-Query: Can you solve this integral for me: ∫x^2 dx?
-Output: irrelevant
+
+Query: When was UTMIST founded?
+
+Output: unknown
 
 Example B:
-<context>
-UTMIST is hosting a GenAI conference.
-</context>
-Query: When is the GenAI conference?
-Output: known
 
-Example C:
 <context>
-The GenAI conference will focus on language models.
+The GenAI conference will be on April 30, 2024
 </context>
-Query: What is a transformer in machine learning?
-Output: known
 
-Example D:
-<context>
-UTMIST helps students connect with AI/ML experts.
-</context>
-Query: Can you summarize my Python homework for me?
+Query: What do you know about history?
+
 Output: irrelevant
 
-### END OF PROMPT ###
-"""
+Example C:
+
+<context>
+The GenAI conference will help students learn about AI.
+</context>
+
+Query: What is the GenAI conference?
+
+Output: relevant
+
+### END OF EXAMPLES ###"""
 
     nodes = retriever.retrieve(input)
 
@@ -277,37 +288,11 @@ Output: """
 
     return Relevance.UNKNOWN
 
-def is_homework_query(input: str) -> bool:
-    """
-    Detects if a query is likely related to homework, assignments, or problem-solving.
-    """
-    # Common patterns in homework queries
-    homework_keywords = [
-        r"\bsolve\b",
-        r"\bcalculate\b",
-        r"\bintegrate\b",
-        r"\bdifferentiate\b",
-        r"\bsort\b",
-        r"\bwrite a function\b",
-        r"\bprove\b",
-        r"\bimplement\b",
-        r"\bhomework\b",
-        r"\bassignment\b",
-    ]
-
-    pattern = re.compile("|".join(homework_keywords), re.IGNORECASE)
-    return bool(pattern.search(input))
 
 def get_response_with_relevance(input: str, past_chat_history=[], retriever=retriever) -> str:
     relevance = classifyRelevance(input, retriever=retriever)
-    print("Relevence: ", relevance)    
-    # Check for homework-like queries
-    if is_homework_query(input):
-        return (
-            "I'm sorry, I cannot assist with homework, coding assignments, or problem-solving. "
-            "Please refer to your course materials or consult your instructor for help."
-        )
-    
+
+    print("relevance: " + str(relevance))
     if relevance == Relevance.KNOWN:
         return aiResponse(input)
     elif relevance == Relevance.UNKNOWN:
