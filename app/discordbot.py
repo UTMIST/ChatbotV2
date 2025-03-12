@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 # Modified for rag
-from custom_query_with_PastChat import classifyRelevance, aiResponse, get_response_with_relevance, Relevance, update_chat_history
+from custom_query_with_PastChat import classifyRelevance, aiResponse, update_chat_history
 # from rag_handler import ai_response, save_unanswered_queries, update_vector_database  
 import os
 import os.path
@@ -17,7 +17,9 @@ client = discord.Client(intents=intents)
 
 # Modified for rag
 env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(dotenv_path=env_path)
+load_dotenv(dotenv_path=env_path, override=True)
+print("Does .env exist?", os.path.exists(env_path))
+
 # Get target guild and channel IDs from environment variables or hard-code them
 TARGET_GUILD_ID = int(os.environ.get("GUILD_ID"))
 TARGET_CHANNEL_ID = int(os.environ.get("CHANNEL_ID"))

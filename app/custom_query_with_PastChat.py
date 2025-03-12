@@ -15,24 +15,28 @@ from llama_index.core import (
 import os.path
 import os
 from enum import Enum
-# Option 2: return a string (we use a raw LLM call for illustration)
+import torch
+import re
+import json
 
+# Option 2: return a string (we use a raw LLM call for illustration)
 from llama_index.llms.openai import OpenAI
 from llama_index.core import PromptTemplate
 from pathlib import Path
 import openai
 from openai import OpenAI as openai_client
 from openai.types.chat import ChatCompletion
-
 from dotenv import load_dotenv
+import sys
+
+sys.path.append(os.path.abspath(r"app\Classifier Models"))
+
+from get_constraint_classifier_outcome import get_constraint_prediction
+from get_intent_classifier_outcome import get_binary_outcome
 
 def strip_whole_str(input_str: str, substr: str) -> str:
     """
     Removes all occurrences of a specified substring from the input string.
-
-    :param input_str: The original string.
-    :param substr: The substring to remove.
-    :return: The modified string with the specified substring removed.
     """
     return input_str.replace(substr, '')
 
@@ -49,13 +53,13 @@ PERSIST_DIR = "./storage"
 storage_context = StorageContext.from_defaults(persist_dir=PERSIST_DIR)
 index = load_index_from_storage(storage_context)
 
-#Combine existing index with new index
+# Combine existing index with new index
 retriever = index.as_retriever()
 
-#Chat History management
+# Chat History management using a SimpleChatStore instance
 chat_store = SimpleChatStore()
 
-# Get the memory module for the given user, which can be used to add new messages.
+# Function to get the memory module for a given user.
 def get_memory_module(userID: str):
     if userID not in chat_store.get_keys():
         return ChatMemoryBuffer.from_defaults(
@@ -76,36 +80,20 @@ def update_chat_history(userID: str, role: str, message: str) -> None:
     elif role == 'bot':
         chat_memory.put(ChatMessage(role=MessageRole.CHATBOT, content=message))
 
-
+# Retrieve the chat history for a specific user.
 def get_chat_history(userID: str) -> list[ChatMessage]:
     if userID not in chat_store.get_keys():
         return []
     return chat_store.store.get(userID)
 
+# NEW: Function to clear chat history for a specific user.
+def clear_chat_history(userID: str) -> None:
+    if userID in chat_store.store:
+        chat_store.store.pop(userID)
+        print(f"Chat history for user '{userID}' has been cleared.")
 
 def embed_chat_history(chat_history):
     pass
-
-qa_prompt = PromptTemplate(
-    "Below is the past chat history. \n"
-    "---------------------\n"
-    "{past_context}\n"
-    "Below is relevant information. Use only if the query is relevant to UTMIST.\n"
-    "---------------------\n"
-    "{context_str}\n"
-    "---------------------\n"
-    "Given the context information and not prior knowledge, "
-    "answer the query. When it comes to writing content, "
-    "two factors are crucial, \"perplexity\" and \"burstiness\"."
-    "Perplexity measures the complexity of text. Separately, burstiness compares the variations of sentences. "
-    "Humans tend to write with greater burstiness, for example, with some longer or complex sentences alongside shorter ones. "
-    "AI sentences tend to be more uniform. Therefore, when writing the following contents I am going to ask you to create, "
-    "I need it to have a good amount of perplexity and burstiness. "
-    "{length_instructions}\n"
-    "Query: {query_str}\n"
-    "Answer: "
-)
-
 
 class RAGStringQueryEngine(CustomQueryEngine):
     """RAG String Query Engine."""
@@ -119,13 +107,9 @@ class RAGStringQueryEngine(CustomQueryEngine):
         response = self.llm.complete(prompt_text)
         return str(response)
 
-
 def determine_response_length(query: str) -> str:
     """
     Determines whether the user's query is general or specific.
-
-    :param query: The user's query string.
-    :return: "general" or "specific"
     """
     CLASSIFICATION_PROMPT = """
 You are an assistant that classifies user queries into "general" or "specific" for a chatbot that answers questions regarding a club, UTMIST.
@@ -139,12 +123,10 @@ Query: "{query}"
 
 Classification (general/specific):
 """
-
     prompt = CLASSIFICATION_PROMPT.format(query=query)
     response = get_openai_response_content(
         messages=[{"role": "user", "content": prompt}]
     )
-
     classification = response.strip().lower()
     if "specific" in classification:
         return "specific"
@@ -154,79 +136,277 @@ Classification (general/specific):
         # Default to "general" if the classification is unclear
         return "general"
 
-
-llm = OpenAI(model="gpt-3.5-turbo", max_tokens = 500)
+llm = OpenAI(model="gpt-3.5-turbo", max_tokens=500)
 synthesizer = get_response_synthesizer(response_mode="compact")
 
-#aiResponse combiend with past_chat_history
+# Intent Classification: Process one sentence at a time.
+def classify_intent(sentence: str) -> str:
+    intent_result = get_binary_outcome(sentence)
+    return intent_result
+
+# Constraints Classification: Process one sentence at a time.
+def classify_constraints(sentence, intent):
+    if intent['Provide_Preference'] == 1:
+        constraint_result = get_constraint_prediction(sentence)
+    else:
+        constraint_result = "N/A"
+    return constraint_result
+
+# Update temporary JSON file using a user-specific filename (userID.json)
+def update_temp_json(new_entry: dict, userID: str):
+    temp_file = f"{userID}.json"
+    if os.path.exists(temp_file):
+        with open(temp_file, "r") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = []
+    else:
+        data = []
+    data.append(new_entry)
+    with open(temp_file, "w") as f:
+        json.dump(data, f, indent=2)
+
+# Classification Results: Process full user input (may be multiple sentences)
+def get_classification_results(input_text, userID):
+    """
+    Splits the full user input into sentences, classifies each sentence using the intent and
+    constraint classifiers, and combines the results. The combined result is stored in a 
+    user-specific temporary JSON file.
+    
+    Returns:
+      - results_list: A list of classification results for each sentence.
+      - combined_results: A single string combining all sentence results.
+    """
+    # Split the full input into sentences (using a simple regex)
+    sentences = re.split(r'(?<=[.!?])\s+', input_text.strip())
+    
+    results_list = []
+    combined_results_lines = []
+    intent_res = ""
+    
+    # Process each sentence individually.
+    for sentence in sentences:
+        if not sentence:
+            continue
+        intent_res = classify_intent(sentence)
+        constraint_res = classify_constraints(sentence, intent_res)
+        result_str = f"Sentence: {sentence}\nIntent: {intent_res}\nConstraints: {constraint_res}"
+        results_list.append(result_str)
+        combined_results_lines.append(result_str)
+    
+    combined_results = "\n\n".join(combined_results_lines)
+    
+    # Store the combined results in the user-specific temporary JSON file.
+    new_entry = {
+        "input_text": input_text,
+        "classification_results": combined_results,
+    }
+    update_temp_json(new_entry, userID)
+    
+    return results_list, combined_results, intent_res
+
+def generate_missing_info_prompt(combined_results, query):
+    """
+    Sends the combined classification details to GPT and asks it to identify any crucial details 
+    that might be missing (such as device type, education level, language preference, etc.).
+    """
+    prompt = PromptTemplate(
+        "Based on the following classification details with 1 being true and 0 being false\n"
+        "{combined_results}\n"
+        "This is the user query\n"
+        "{query}\n\n"
+        "Identify any crucial details that might be missing and would be of help to answer the user query and that are needed to provide an accurate recommendation. "
+        "Consider details such as device type, education level, language preference, time availability, etc. "
+        "If you find missing details, ask the user for them; if no additional information is needed, simply output 'None'."
+    )
+    try:
+        prompt_formatted = prompt.format(combined_results=combined_results, query=query)
+        local_prompt = PromptTemplate(prompt_formatted)
+        query_engine = RAGStringQueryEngine(
+            retriever=retriever,
+            response_synthesizer=synthesizer,
+            llm=llm,
+            qa_prompt=local_prompt,
+        )
+        missing_info = query_engine.custom_query(prompt_formatted)
+        return missing_info
+    except Exception as e:
+        print(f"Error in generate_missing_info_prompt: {e}")
+        return "Could not determine missing information. Please provide any relevant details that might be missing."
+
+def Classify_Action(combined_results: str) -> str:
+    prompt = PromptTemplate(
+        "Below are the combined classification results derived from the user's query:\n"
+        "{combined_results}\n\n"
+        "Based on these results, determine which of the following actions the bot should take:\n"
+        "1. Request More Information\n"
+        "2. Generate Recommendation\n"
+        "3. Answer a Question\n"
+        "4. Other/Quick Response\n\n"
+
+        "Consider the following:\n"
+        "- When little is known about the user and their preferences (such as device type, education level, language preference, time availability, budget and other preferences), output 'Request More Information'.\n"
+        "- If the user appears to be seeking personalized recommendation and only when sufficient information is present, output 'Generate Recommendation'.\n"
+        "- If they want a recommendation, but not enough information is present, output 'Request More Information'.\n"
+        "- If the query is straightforward and answerable, output 'Answer a Question'.\n"
+        "- If the input does not fall into any of the categories above, classify as 'Other/Quick Response'.\n"
+        "Please output exactly one of these phrases with exact capitalization."
+    )
+    prompt_formatted = prompt.format(combined_results=combined_results)
+    local_prompt = PromptTemplate(prompt_formatted)
+    query_engine = RAGStringQueryEngine(
+        retriever=retriever,
+        response_synthesizer=synthesizer,
+        llm=llm,
+        qa_prompt=local_prompt,
+    )
+    classification = query_engine.custom_query(prompt_formatted)
+    return classification
+
+# aiResponse combined with past chat history
 def aiResponse(input, userID):
-    # Determine the response length classification
-    response_length = determine_response_length(input)
+    # For debugging: print the current chat_store content.
+    print("Current chat_store:", chat_store.store)
+    
+    # Optionally, clear the chat history for a new conversation.
+    # Uncomment the next line if you want to clear previous history:
+    # clear_chat_history(userID)
 
-    # Set length instructions based on the classification
-    print(response_length)
-    if response_length == "general":
-        length_instructions = "Please provide a concise answer, not exceeding 50 words."
-    else:  # "specific"
-        length_instructions = "Please provide a detailed answer, still not exceeding 200 words."
+    # Load any existing temporary classification results.
+    user_file = f"{userID}.json"
+    if os.path.exists(user_file):
+        with open(user_file, "r") as f:
+            past_results = json.load(f)
+    else:
+        past_results = []
 
-    # Retrieve past conversations
+    # Get classification results for the current user input.
+    results_list, combined_results, intent_res = get_classification_results(input, userID)
+    # Optionally, you can combine past temporary results if desired:
+    results_list.extend(past_results)
+
+    classified_action = Classify_Action(combined_results)
+    print(combined_results)
+    print("Classified Action:", classified_action)
+
+    # Retrieve past conversations from the chat_store.
     past_context_str = "\n\n".join([f"{msg.role.value}: {msg.content}" for msg in get_chat_history(userID=userID)])
-
-    # Address current context from the vector database
+    # Retrieve context from the vector database.
     nodes = retriever.retrieve(input)
     context_str = "\n\n".join([n.node.get_content() for n in nodes])
+    print("Past Chat History:", past_context_str)
+    print("Vector Context:", context_str)
+    
+    query_str = input
+    past_context = past_context_str  # Use the actual past context
+    
+    if classified_action == "Answer a Question":
+        print("intents", intent_res)
+        if(intent_res["Club_Related_Inquiry"] == 1):
+            qa_prompt = PromptTemplate(
+                "Below are the combined classification results derived from the user's query:\n"
+                "{combined_results}\n\n"
+                "Below is the relevant context retrieved from the vector database:\n"
+                "{context_str}\n\n"
+                "The user's question is:\n"
+                "{query_str}\n\n"
+                "This is the user's Chat History:\n"
+                "{past_context}\n\n"
+                "Based on the above information, provide a clear, concise, and accurate answer to the question. "
+                "Make sure to use the context provided from the vector database to enrich your answer. "
+                "Keep your response simple and limited to 100 words."
+            )
+        else:
+            qa_prompt = PromptTemplate(
+                "Below are the combined classification results derived from the user's query:\n"
+                "{combined_results}\n\n"
+                "The user's question is:\n"
+                "{query_str}\n\n"
+                "This is the user's Chat History:\n"
+                "{past_context}\n\n"
+                "Based on the above information, provide a clear, concise, and accurate answer to the question. "
+                "Make sure to use the context provided from the vector database to enrich your answer. "
+                "Keep your response simple and limited to 100 words."
+            )
+    elif classified_action == "Generate Recommendation":
+        qa_prompt = PromptTemplate(
+            "Below are the combined classification results for a user's query:\n"
+             "{combined_results}\n\n"
+             "Below is the relevant context retrieved from the vector database:\n"
+             "{context_str}\n\n"
+             "The user's question is:\n"
+             "{query_str}\n\n"
+             "This is the user's Chat History:\n"
+             "{past_context}\n\n"
+            "Based on these classification results, generate a personalized recommendation. "
+            "Your recommendation should consider the user's identified intent (e.g., Provide Preference, Inquire Resources, etc.) "
+            "and any constraints such as education level, resource type, topic, language, budget, learning style, time commitment, "
+            "level of depth, preferred topics, and format preferences. "
+            "Please provide an actionable recommendation that is clear, concise, and tailored to the user's needs. "
+            "Limit your response to 100 words maximum."
+        )
+    elif classified_action == "Other/Quick Response":
+        qa_prompt = PromptTemplate(
+            "Below is the user input, respond in a short and concise manner.\n"
+            "{query_str}\n"
+            "Limit your response to 50 words maximum."
+        )
+        qa_prompt_formatted = qa_prompt.format(query_str=input)
+        qa_prompt_local = PromptTemplate(qa_prompt_formatted)
+        query_engine = RAGStringQueryEngine(
+            retriever=retriever,
+            response_synthesizer=synthesizer,
+            llm=llm,
+            qa_prompt=qa_prompt_local,
+        )
+        response = query_engine.custom_query(qa_prompt_formatted)
+        return response
+    else:
+        # If classified action doesn't fall into the above categories, ask for missing info.
+        missing_info_prompt = generate_missing_info_prompt(combined_results, input)
+        return missing_info_prompt
 
-    # Format the QA prompt with the length instructions
     qa_prompt_formatted = qa_prompt.format(
-        length_instructions=length_instructions,
-        past_context=past_context_str,
-        context_str=context_str,
-        query_str=input
-    )
+        combined_results=combined_results, 
+        past_context=past_context, 
+        context_str=context_str, 
+        query_str=query_str)
+    
     qa_prompt_local = PromptTemplate(qa_prompt_formatted)
-
     query_engine = RAGStringQueryEngine(
         retriever=retriever,
         response_synthesizer=synthesizer,
         llm=llm,
         qa_prompt=qa_prompt_local,
     )
-
+    print(qa_prompt_formatted, "Prompt")
     response = query_engine.custom_query(qa_prompt_formatted)
     return response
-
 
 class Relevance(Enum):
     KNOWN = "known"
     UNKNOWN = "unknown"
     IRRELEVANT = "irrelevant"
 
-
 def classifyRelevance(input, retriever=retriever) -> Relevance:
     """
     Classifies how relevant a particular user input is to UTMIST.
-
-    :param input: The user input to classify.
-    :return: ``Relevance.known`` if the input is known, ``Relevance.unknown`` if the input is unknown, and ``Relevance.irrelevant`` if the input is irrelevant.
     """
-
-    RELEVANCE_DETERMINATION_PROMPT = """You are talking to a user as a representative of a club called the University of Toronto Machine Intelligence Team (UTMIST). 
+    RELEVANCE_PROMPT = """You are talking to a user as a representative of a club called the University of Toronto Machine Intelligence Team (UTMIST). 
 
 Your job is to determine whether the user's query is relevant to any of the following, and output one of the responses according to the possible scenarios.
 
 1. AI and machine learning related questions
 2. UTMIST club information and events
 
-Note that when the user refers to "you" or "your", they are referring to UTMIST.    
+Note that when the user refers to "you" or "your", they are referring to UTMIST.
 
 <possible scenarios>
-
 1. SCENARIO: If the query seems relevant to UTMIST (i.e. events or general info) or AI and the "context" explicitly contains information about the query; OUTPUT: "known"
 2. SCENARIO: If the query is about GENERAL knowledge in AI/ML but NOT about UTMIST; OUTPUT: "known"
 3. SCENARIO: If the query seems relevant to UTMIST or AI but the information is not in "context" AND it is NOT GENERAL knowledge about AI/ML; OUTPUT: "unknown"
 4. SCENARIO: If the query is completely irrelevant to the criteria above; OUTPUT: "irrelevant"
-
 </possible scenarios>
 
 Example A:
@@ -234,9 +414,7 @@ Example A:
 <context>
 UTMIST is a club to help students learn about AI
 </context>
-
 Query: When was UTMIST founded?
-
 Output: unknown
 
 Example B:
@@ -244,9 +422,7 @@ Example B:
 <context>
 The GenAI conference will be on April 30, 2024
 </context>
-
 Query: What do you know about history?
-
 Output: irrelevant
 
 Example C:
@@ -254,17 +430,13 @@ Example C:
 <context>
 The GenAI conference will help students learn about AI.
 </context>
-
 Query: What is the GenAI conference?
-
 Output: relevant
 
 ### END OF EXAMPLES ###"""
 
     nodes = retriever.retrieve(input)
-
     context_str = "\n\n".join([n.node.get_content() for n in nodes])
-
     user_query = f"""<context>
 {context_str}
 </context>
@@ -272,44 +444,29 @@ Output: relevant
 Query: {input}
 
 Output: """
-
-    # Retry up to 3 times in case GPT returns wrong value.
+    # Retry up to 3 times in case GPT returns an unexpected value.
     for i in range(3):
-
-        response: str = get_openai_response_content(system_prompt=RELEVANCE_DETERMINATION_PROMPT, model="gpt-3.5-turbo",
+        response: str = get_openai_response_content(system_prompt=RELEVANCE_PROMPT, model="gpt-3.5-turbo",
                                                     messages=[{"role": "user", "content": user_query}])
-        
         response = strip_whole_str(response, "Output:").strip()
         try:
             return Relevance(response)
         except ValueError:
             print("value error: " + response)
             pass
-
     return Relevance.UNKNOWN
-
 
 def get_response_with_relevance(input: str, past_chat_history=[], retriever=retriever) -> str:
     relevance = classifyRelevance(input, retriever=retriever)
-
     print("relevance: " + str(relevance))
     if relevance == Relevance.KNOWN:
-        return aiResponse(input)
+        return aiResponse(input, userID="default")
     elif relevance == Relevance.UNKNOWN:
         return get_unknown_response(input, past_chat_history, retriever)
     else:
         return "I'm sorry, I cannot answer that question as I am only here to provide information about UTMIST and AI/ML. If you think this is a mistake, please contact the UTMIST team."
 
-
 def get_unknown_response(latest_user_input: str, past_chat_history=[], retriever=retriever) -> str:
-    """
-    Returns a response when the input is classified as irrelevant.
-
-    :param input: The user input to respond to.
-    :param past_chat_history: The chat history to consider when responding.
-    :return: A response to the user input.
-    """
-
     UNKNOWN_RESPONSE_PROMPT = """You are talking to a student as a representative of the University of Toronto Machine Intelligence Team (UTMIST), a student group dedicated to educating students about AI/ML through various events (conferences, workshops), academic programs, and other initiatives. 
 
 Given the chat history, you must try to answer the user's latest inquiry using your knowledge of AI and nothing else. This means you must not use knowledge on any other topic other than UTMIST, AI, and/or machine learning.
@@ -320,27 +477,20 @@ If you cannot answer the user's query using your knowledge of AI/ML, you must te
 1. DO NOT provide any information that is not related to AI/ML and/or computer science.
 2. DO NOT make up information that you do not 100% know to be true.
 </RULES>"""
-
     messages = list(past_chat_history)
     messages.append({"role": "user", "content": latest_user_input})
-
     return get_openai_response_content(system_prompt=UNKNOWN_RESPONSE_PROMPT, model="gpt-3.5-turbo", messages=messages)
-
 
 def get_openai_response_content(system_prompt="", messages=[], model="gpt-3.5-turbo", **kwargs) -> str:
     assert messages or system_prompt, "prompt or messages must be provided"
-
     if system_prompt:
         messages.insert(0, {"role": "system", "content": system_prompt})
-
     response = _get_openai_response(messages=messages, model=model, **kwargs)
     return _extract_openai_response_content(response)
-
 
 def _extract_openai_response_content(response: ChatCompletion) -> str:
     assert isinstance(response, ChatCompletion), "response must be a ChatCompletion object"
     return response.choices[0].message.content
-
 
 def _get_openai_response(messages=[], model="gpt-3.5-turbo", **kwargs) -> ChatCompletion:
     response: ChatCompletion = openai_client_instance.chat.completions.create(model=model, messages=messages, **kwargs)

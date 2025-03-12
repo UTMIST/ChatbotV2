@@ -19,7 +19,7 @@ from transformers import RobertaTokenizer, RobertaModel
 
 #############################################
 # Hyperparameters and File Paths (edit as needed)
-EPOCHS_PHASE1 = 10        # Number of epochs to train the two initial classifiers
+EPOCHS_PHASE1 = 5      # Number of epochs to train the two initial classifiers
 EPOCHS_PHASE3 = 5         # Number of epochs to train the third classifier
 BATCH_SIZE = 16           # Batch size
 LEARNING_RATE = 2e-5      # Learning rate
@@ -29,7 +29,7 @@ NUM_CLASSES = 2           # Two classes: soft (0) and hard (1) constraint
 LABELLED_FILE = r"app\data\Combined_Dataset_Constraint.csv"     # e.g., "./data/labelled.csv"
 UNLABELLED_FILE = r"app\data\Unlabelled_Constraint_Data.csv"           # e.g., "./data/unlabelled.csv"
 # Model save path
-MODEL_SAVE_PATH = "model3_weights.pth"
+MODEL_SAVE_PATH = r"app\Classifier Models\Constraints.pth"
 # Use Automatic Mixed Precision if using CUDA
 USE_AMP = True
 #############################################

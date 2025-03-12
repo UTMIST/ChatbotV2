@@ -44,8 +44,7 @@ def get_constraint_prediction(input_text: str) -> dict:
 
     # Optionally, map the numeric prediction to a human-readable format
     label_map = {1: 'soft', 2: 'hard'}
-
-    return {'predicted_label': pred_label, 'predicted_constraint': label_map[pred_label]}
+    return {'predicted_constraint': label_map[pred_label]}
 
 # Example usage:
 if __name__ == "__main__":

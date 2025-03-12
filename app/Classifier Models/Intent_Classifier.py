@@ -10,7 +10,7 @@ from transformers import RobertaTokenizer, RobertaModel
 
 #############################################
 # Hyperparameters and File Paths (edit as needed)
-EPOCHS_PHASE1 = 10        # Number of epochs to train the two initial classifiers
+EPOCHS_PHASE1 = 5        # Number of epochs to train the two initial classifiers
 EPOCHS_PHASE3 = 5         # Number of epochs to train the third classifier
 BATCH_SIZE = 16           # Batch size
 LEARNING_RATE = 2e-5      # Learning rate
@@ -23,7 +23,7 @@ NUM_LABELS = len(LABELS)
 LABELLED_FILE = r"app\data\Combined_Dataset.csv"     # e.g., "./data/labelled.csv"
 UNLABELLED_FILE = r"app\data\unlabelled.csv"  # e.g., "./data/unlabelled.csv"
 # Model save path
-MODEL_SAVE_PATH = "model3_weights.pth"
+MODEL_SAVE_PATH = r"app\Classifier Models\intent_classification.pth"
 # Use Automatic Mixed Precision if using CUDA
 USE_AMP = True
 #############################################
