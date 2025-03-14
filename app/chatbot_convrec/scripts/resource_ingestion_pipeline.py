@@ -65,7 +65,8 @@ if __name__ == "__main__":
     data_source : LocalFileDataSource = pipeline.data_source
 
     data_source.save_transformed_data(pipeline.processed_data)
-
+    
+    VEC_STORE.persist(persist_path="./storage/ml_resources/vec_store.json")
 
 
 

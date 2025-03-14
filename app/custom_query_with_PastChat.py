@@ -31,8 +31,8 @@ import sys
 
 sys.path.append(os.path.abspath(r"app\Classifier Models"))
 
-from get_constraint_classifier_outcome import get_constraint_prediction
-from get_intent_classifier_outcome import get_binary_outcome
+from app.classifier_models.get_constraint_classifier_outcome import get_constraint_prediction
+from app.classifier_models.get_intent_classifier_outcome import get_binary_outcome
 
 def strip_whole_str(input_str: str, substr: str) -> str:
     """
