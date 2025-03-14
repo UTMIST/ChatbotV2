@@ -10,6 +10,16 @@ def retrieve_recommendation(hard_constraints: dict,
                             constraints_to_query_transformer: LLMQueryTransformer = DEFAULT_CONSTRAINTS_TO_QUERY_TRANSFORMER,
                             vec_retriever: VectorStoreRetriever = DEFAULT_RECOMMENDATION_RETRIEVER) -> list[NodeWithScore]:
 
+    """
+    Retrieve recommendations based on hard and soft constraints.
+
+    Args:
+        hard_constraints (dict): Hard constraints for the recommendation. (In the form of {"Constraint type": "Constraint description"})
+        soft_constraints (dict): Soft constraints for the recommendation. (In the form of {"Constraint type": "Constraint description"})
+        constraints_to_query_transformer (LLMQueryTransformer): Transformer for constraints to query.
+        vec_retriever (VectorStoreRetriever): Retriever for the vector store.
+    """
+
     query = constraints_to_query_transformer.transform_query(
 
         {
